@@ -12,6 +12,31 @@ from std_msgs.msg import Float64MultiArray
 from ourbeloved.wx250s_kinematics import fk, ik
 from xarmclient import XArm
 
+# index from controller_state array
+# [leftX, rightX, dpadX, leftY, rightY, dpadY, 
+# homeButtonState, jointButtonState, cartButtonState]
+
+# Variables
+JOINT_SPEED = 2.0  # degrees per iteration
+CART_SPEED = 5.0   # mm per iteration
+
+# controller_state[idx]
+LEFT_X = 0
+RIGHT_X = 1
+DPAD_X = 2
+LEFT_Y = 3
+RIGHT_Y = 4
+DPAD_Y = 5
+HOME_BUTTON = 6
+JOINT_BUTTON = 7
+CART_BUTTON = 8
+
+STUCK_THRESHOLD = 0.1       # degrees
+STUCK_COUNTER_MAX = 100  
+JOINT_THRESHOLD = 1.0       # degrees
+ITERATIONS = 100
+GOAL_THRESHOLD = 19         # mm
+
 class Cannon(Node):
 
     def __init__(self):
@@ -22,6 +47,7 @@ class Cannon(Node):
             Float64MultiArray, 
             "/controller_state", 
             self.listener_callback, 10)
+        
         self.precise_joint_sub = self.create_subscription(
             JointState, 
             "/precise_joint_cmd", 
@@ -44,8 +70,45 @@ class Cannon(Node):
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
 
-    def listener_callback(self, msg):
-        self.controller_state_sub = 
+    # --- Helper Functions ----
+    def check_goal(self, goalX, goalY, goalZ):
+        goal_joints = 0
+
+        
+        return goal_joints
+
+
+
+    def controller_state_callback(self, msg):
+        # if we're meant to be in precise mode, exit out of function
+        if self.precise_mode == True:
+            return None
+        
+        data = msg.data
+
+        # what mode are we in
+        if data[JOINT_BUTTON] == 1 and self.prev_joint_button == 0:
+            self.mode = 'joint'
+            self.get_logger().info('Switched to joint mode')  
+        if data[CART_BUTTON] == 1 and self.prev_cart_button == 0:
+            self.mode = 'cartesian'
+            self.get_logger().info('Switched to cartestian mode')
+        
+        # Update previous button states 
+        self.prev_joint_button = data[JOINT_BUTTON]
+        self.prev_cart_button = data[CART_BUTTON]
+
+        # Detect button press for homing
+        if data[HOME_BUTTON] == 1 and self.prev_home_button == 0:
+            self.xarm.home()
+            self.get_logger().info('Homing...')
+        self.prev_home_button = data[HOME_BUTTON]  # update state
+
+
+
+    def precise_joint_callback(self, msg):
+        self.precise_mode = True
+
 
 def main(args=None):
     try:
