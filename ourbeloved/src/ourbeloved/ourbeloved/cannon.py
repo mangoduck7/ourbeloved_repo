@@ -12,6 +12,8 @@ from std_msgs.msg import Float64MultiArray
 from ourbeloved.wx250s_kinematics import fk, ik
 from xarmclient import XArm
 
+import numpy as np
+
 # index from controller_state array
 # [leftX, rightX, dpadX, leftY, rightY, dpadY, 
 # homeButtonState, jointButtonState, cartButtonState]
@@ -72,10 +74,123 @@ class Cannon(Node):
 
     # --- Helper Functions ----
     def check_goal(self, goalX, goalY, goalZ):
-        goal_joints = 0
+        # Home position i guess
+        goal_joints = [0.0] * 6
 
+        # Error flag will be raised if ik() fails for the next intermediate frame
+        error_flag = 0
+
+        # use fk() to get current HTM of arm, and extract current x y z position of end effector
+        startJoints = self.xarm.get_joints()
+        startHTM, _ = fk(startJoints)
+        self.get_logger().info(f"Start Frame x: {startHTM[0, 3]:.2f}, y: {startHTM[1, 3]:.2f}, z: {startHTM[2, 3]:.2f}")
+
+        # this is the goal HTM we want to go to
+        goalHTM = startHTM.copy()
+        goalHTM[0, 3] = goalX
+        goalHTM[1, 3] = goalY
+        goalHTM[2, 3] = goalZ
+
+        # makes [x, y, z]        
+        startPos = startHTM[:, 3].copy()  # all rows, only col 3
+        goalPos = goalHTM[:, 3].copy()
+
+        # currJoints is updated each iteration
+        currJoints = startJoints
+
+        numFrames = ITERATIONS  # this will need to be changed to manually calculated
+
+        # create intermediate frames and use ik() to calculate the joints for each intermediate frame. 
+        # If ik() fails at any point, we reject the goal request
+        for i in range(1, numFrames + 1):
+            if (error_flag != 1):  # if no error
+                # create intermediate frame
+                interPos = startPos + (i / numFrames) * (goalPos - startPos)
+                interHTM = startHTM.copy()
+                
+                interHTM[0, 3] = interPos[0]
+                interHTM[1, 3] = interPos[1]
+                interHTM[2, 3] = interPos[2]
+
+                # ik() for this intermediate frame
+                self.get_logger().info(f"Intermediate Frame x: {interPos[0]:.2f}, y: {interPos[1]:.2f}, z: {interPos[2]:.2f}")
+                nextJoints = ik(currJoints, interHTM)
+
+                if nextJoints is None:
+                    error_flag = 1
+                    self.get_logger().info(f"Error when calculating joints for intermediate frame {i}")
+                else:
+                    currJoints = nextJoints
+
+        # pass through the final goal frame to check if valid
+        if (error_flag == 0):
+            error_flag = self.xarm.is_goal_valid(currJoints)
+            self.get_logger().info(f"Is goal valid returned: {error_flag}")
+            self.get_logger().info(f"Goal Joint Angles: {currJoints}")
         
-        return goal_joints
+        # if no error arises in the previous check, it's a valid goal. Accept
+        if (error_flag == 0):
+            # Valid
+            goal_joints = currJoints
+            self.get_logger().info("Received goal request")
+            return goal_joints
+        else:
+            # Invalid
+            self.get_logger().info("Rejected goal request")
+            return None
+
+
+    def move_to_goal(self, goal_joints, goalX, goalY, goalZ):
+        goal_reached = 0  # flag
+        isStuck = 0  # flag
+        distance = 0.0
+        prev_distance = 0.0
+        stuck_counter = 0
+
+        # calculate goal HTM
+        goalHTM, _ = fk(self.xarm.get_joints())
+        goalHTM[0, 3] = goalX
+        goalHTM[1, 3] = goalY
+        goalHTM[2, 3] = goalZ
+
+        self.xarm.set_joints(goal_joints) # begin going to the goal position
+
+        while (not goal_reached and not isStuck):
+            # Calculating distance to goal for feedback and checking if stuck or at goal
+            currentHTM, _ = fk(self.xarm.get_joints())
+
+            currentPos = currentHTM[:, 3].copy()  # all rows, only col 3
+            goalPos = goalHTM[:, 3].copy()
+
+            diff = currentPos - goalPos
+            distance = float(np.sqrt(diff[0]**2 + diff[1]**2 + diff[2]**2))
+
+            # check if stuck or at goal by comparing current distance to previous distance. 
+            # If the distance is not decreasing (by at least the stuck threshold), we are stuck. 
+            # If the distance is less than the 'at goal threshold', we have reached the goal.
+
+            if (np.abs(prev_distance - distance) < STUCK_THRESHOLD): # this is a jank ass way of doing it. might be better to check the movement of the actual joints for example if the wrist is rotating. 
+                stuck_counter += 1
+                self.get_logger().info(f"Stuck Counter: {stuck_counter}")
+            else:
+                stuck_counter = 0
+
+            # Flag stuck
+            if (stuck_counter >= STUCK_COUNTER_MAX):
+                isStuck = 1
+                self.xarm.set_joints(self.xarm.get_joints())   # stay where it is
+                self.get_logger().info("I am stuck!")
+
+                return False  # exit out of while loop
+            
+            # goal reached
+            if (distance < GOAL_THRESHOLD):
+                goal_reached = 1
+                self.get_logger().info("I have reached my destination!")
+                
+                return True
+            
+            prev_distance = distance
 
 
 
