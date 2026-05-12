@@ -1,0 +1,4 @@
+<launch>
+    <executable cmd="/usr/bin/env xarmserver"/> <!-- xarmserver_sim only for VM. Use /usr/bin/env xarmserver-->
+    <node pkg="wx250s" exec="cannon" />
+</launch>
