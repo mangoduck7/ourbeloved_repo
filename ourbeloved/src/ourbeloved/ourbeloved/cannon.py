@@ -71,6 +71,9 @@ class Cannon(Node):
         timer_period = 0.1  # seconds
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
+        # Cartesian joystick control
+        self.ikIsBusy = False
+
 
     # --- Helper Functions ----
     def check_goal(self, goalX, goalY, goalZ):
@@ -219,10 +222,69 @@ class Cannon(Node):
             self.get_logger().info('Homing...')
         self.prev_home_button = data[HOME_BUTTON]  # update state
 
+        # MODES ---------
+        if self.mode == 'joint':
+            # extract controller states from data
+            leftX = data[LEFT_X]
+            leftY = data[LEFT_Y]
+            rightX = data[RIGHT_X]
+            rightY = data[RIGHT_Y]
+            dpadX = data[DPAD_X]
+            dpadY = data[DPAD_Y]
+
+            # get current joints
+            currJoints = list(self.xarm.get_joints())
+
+            # increment joint angles based on controller
+            currJoints[0] += leftX * JOINT_SPEED
+            currJoints[1] += leftY * JOINT_SPEED
+            currJoints[2] += rightX * JOINT_SPEED
+            currJoints[3] += rightY * JOINT_SPEED
+            currJoints[4] += dpadX * JOINT_SPEED
+            currJoints[5] += dpadY * JOINT_SPEED
+
+            # if at any point the goal is invalid, stay at currrent position
+            if self.xarm.is_goal_valid(currJoints) != 0:
+                self.xarm.set_joints(currJoints)
+
+
+        elif self.mode == 'cartesian':
+            # if an ik() calculation is ongoing, skip this iteration to let it process
+            if self.ikIsBusy == True:
+                return None
+            
+            rightX = data[RIGHT_X]  # Y axis (left and right)
+            rightY = data[RIGHT_Y]  # X axis (in and out)
+            leftY = data[LEFT_Y]    # Z axis (up and down)
+            
+            # if no joystick input, just don't move
+            if rightX == 0.0 and rightY == 0.0 and leftY == 0.0:
+                return None
+            
+            # start ik() if there IS joystick input
+            self.ikIsBusy = True  
+
+            currJoints = self.xarm.get_joints()
+            currHTM, _ = fk(currJoints)
+
+            goalHTM = currHTM.copy()
+            goalHTM[0, 3] += rightY + CART_SPEED  # X axis, in and out
+            goalHTM[1, 3] += rightX + CART_SPEED  # Y axis, left and right
+            goalHTM[2, 3] += leftY + CART_SPEED   # Z axis, up and down
+
+            nextJoints = ik(currJoints, goalHTM)
+
+            if nextJoints is not None:  # if ik() gave a joint goal
+                if self.xarm.is_goal_valid(nextJoints) == 0:  # if joint goal valid
+                    self.xarm.set_joints(nextJoints)
+
+            self.ikIsBusy = False
 
 
     def precise_joint_callback(self, msg):
         self.precise_mode = True
+        joint_pos_list = msg.position
+
 
 
 def main(args=None):
