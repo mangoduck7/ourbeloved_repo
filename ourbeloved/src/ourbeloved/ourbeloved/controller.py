@@ -55,9 +55,24 @@ class Controller(Node):
         self.fire_pub = self.create_publisher(
             Bool, '/fire', 10)
         
+        timer_period = 0.05  # seconds, which is 20Hz
+        self.timer = self.create_timer(timer_period, self.timer_callback)
+
         self.joint_angles = [0.0] * 6
 
         self.prev_fire_button = 0             # edge detect for fire
+
+        self.leftX = 0.0
+        self.rightX = 0.0
+        self.dpadX = 0.0
+
+        self.leftY = 0.0
+        self.rightY = 0.0
+        self.dpadY = 0.0
+
+        self.homeButtonState = 0.0
+        self.jointButtonState = 0.0
+        self.cartButtonState = 0.0
 
 
         
@@ -66,25 +81,25 @@ class Controller(Node):
         axes = msg.axes
         buttons = msg.buttons
         
-        leftX = axes[LEFT_X]
-        rightX = axes[RIGHT_X]
-        dpadX = axes[DPAD_X]
+        self.leftX = axes[LEFT_X]
+        self.rightX = axes[RIGHT_X]
+        self.dpadX = axes[DPAD_X]
 
-        leftY = axes[LEFT_Y]
-        rightY = axes[RIGHT_Y]
-        dpadY = axes[DPAD_Y]
+        self.leftY = axes[LEFT_Y]
+        self.rightY = axes[RIGHT_Y]
+        self.dpadY = axes[DPAD_Y]
 
-        homeButtonState = buttons[HOME_IDX]
-        jointButtonState = buttons[JOINT_BUTTON]
-        cartButtonState = buttons[CART_BUTTON]
+        self.homeButtonState = buttons[HOME_IDX]
+        self.jointButtonState = buttons[JOINT_BUTTON]
+        self.cartButtonState = buttons[CART_BUTTON]
 
         # Publish controller state
-        controller_state_msg = Float64MultiArray()
-        controller_state_msg.data = [
-            leftX, rightX, dpadX, leftY, rightY, dpadY, 
-            homeButtonState, jointButtonState, cartButtonState
-        ]
-        self.controller_state_pub.publish(controller_state_msg)
+        # controller_state_msg = Float64MultiArray()
+        # controller_state_msg.data = [
+        #     leftX, rightX, dpadX, leftY, rightY, dpadY, 
+        #     homeButtonState, jointButtonState, cartButtonState
+        # ]
+        # self.controller_state_pub.publish(controller_state_msg)
 
         # Publish fire
         firing_msg = Bool()
@@ -93,13 +108,23 @@ class Controller(Node):
         # If button wasn't already on, and we're now pressing it,
         if self.prev_fire_button == 0 and buttons[FIRE_BUTTON] == 1:
             self.fire_pub.publish(firing_msg)
+            self.prev_fire_button = 1
 
         # If button was being pressed, and now we're not anymore,
         if self.prev_fire_button == 1 and buttons[FIRE_BUTTON] == 0:
             self.fire_pub.publish(firing_msg)
+            self.prev_fire_button = 0
 
 
-
+    def timer_callback(self):
+            controller_state_msg = Float64MultiArray()
+            
+            controller_state_msg.data = [
+                self.leftX, self.rightX, self.dpadX, self.leftY, self.rightY, self.dpadY, 
+                self.homeButtonState, self.jointButtonState, self.cartButtonState
+            ]
+            
+            self.controller_state_pub.publish(controller_state_msg)
 
 def main(args=None):
     try:

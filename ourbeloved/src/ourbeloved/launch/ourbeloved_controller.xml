@@ -1,5 +1,5 @@
 <launch>
-    <executable cmd="/usr/bin/env xarmserver"/> <!-- xarmserver_sim only for VM. Use /usr/bin/env xarmserver-->
-    <node pkg="wx250s" exec="controller" />
-    <node pkg="wx250s" exec="joint_state_node" />
+    <!--<executable cmd="/usr/bin/env xarmserver"/>  xarmserver_sim only for VM. Use /usr/bin/env xarmserver-->
+    <node pkg="joy" exec="joy_node" />
+    <node pkg="ourbeloved" exec="controller" />
 </launch>

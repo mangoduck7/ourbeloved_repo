@@ -19,8 +19,8 @@ import numpy as np
 # homeButtonState, jointButtonState, cartButtonState]
 
 # Variables
-JOINT_SPEED = 2.0  # degrees per iteration
-CART_SPEED = 5.0   # mm per iteration
+JOINT_DELTA_MULTIPLIER = 2.0  # degrees per iteration
+CART_DELTA_MULTIPLIER = 5.0   # mm per iteration
 
 # controller_state[idx]
 LEFT_X = 0
@@ -48,15 +48,16 @@ class Cannon(Node):
         self.controller_state_sub = self.create_subscription(
             Float64MultiArray, 
             "/controller_state", 
-            self.listener_callback, 10)
+            self.controller_state_callback, 10)
         
         self.precise_joint_sub = self.create_subscription(
             JointState, 
             "/precise_joint_cmd", 
-            self.listener_callback, 10)
+            self.precise_joint_callback, 10)
         
         # Robot
         self.xarm = XArm()
+        self.where_i_should_be = [0.0, 45.0, -80.0, 0.0, 35.0, 0.0]
 
         # Modes
         self.mode = 'joint'
@@ -68,133 +69,11 @@ class Cannon(Node):
         self.prev_cart_button = 0
 
         # Timer (generic template)
-        timer_period = 0.1  # seconds
-        self.timer = self.create_timer(timer_period, self.timer_callback)
+        self.timer_period = 0.05  # seconds, make sure this is the same as controller
+        #self.timer = self.create_timer(timer_period, self.timer_callback)
 
         # Cartesian joystick control
         self.ikIsBusy = False
-
-
-    # --- Helper Functions ----
-    def check_goal(self, goalX, goalY, goalZ):
-        # Home position i guess
-        goal_joints = [0.0] * 6
-
-        # Error flag will be raised if ik() fails for the next intermediate frame
-        error_flag = 0
-
-        # use fk() to get current HTM of arm, and extract current x y z position of end effector
-        startJoints = self.xarm.get_joints()
-        startHTM, _ = fk(startJoints)
-        self.get_logger().info(f"Start Frame x: {startHTM[0, 3]:.2f}, y: {startHTM[1, 3]:.2f}, z: {startHTM[2, 3]:.2f}")
-
-        # this is the goal HTM we want to go to
-        goalHTM = startHTM.copy()
-        goalHTM[0, 3] = goalX
-        goalHTM[1, 3] = goalY
-        goalHTM[2, 3] = goalZ
-
-        # makes [x, y, z]        
-        startPos = startHTM[:, 3].copy()  # all rows, only col 3
-        goalPos = goalHTM[:, 3].copy()
-
-        # currJoints is updated each iteration
-        currJoints = startJoints
-
-        numFrames = ITERATIONS  # this will need to be changed to manually calculated
-
-        # create intermediate frames and use ik() to calculate the joints for each intermediate frame. 
-        # If ik() fails at any point, we reject the goal request
-        for i in range(1, numFrames + 1):
-            if (error_flag != 1):  # if no error
-                # create intermediate frame
-                interPos = startPos + (i / numFrames) * (goalPos - startPos)
-                interHTM = startHTM.copy()
-                
-                interHTM[0, 3] = interPos[0]
-                interHTM[1, 3] = interPos[1]
-                interHTM[2, 3] = interPos[2]
-
-                # ik() for this intermediate frame
-                self.get_logger().info(f"Intermediate Frame x: {interPos[0]:.2f}, y: {interPos[1]:.2f}, z: {interPos[2]:.2f}")
-                nextJoints = ik(currJoints, interHTM)
-
-                if nextJoints is None:
-                    error_flag = 1
-                    self.get_logger().info(f"Error when calculating joints for intermediate frame {i}")
-                else:
-                    currJoints = nextJoints
-
-        # pass through the final goal frame to check if valid
-        if (error_flag == 0):
-            error_flag = self.xarm.is_goal_valid(currJoints)
-            self.get_logger().info(f"Is goal valid returned: {error_flag}")
-            self.get_logger().info(f"Goal Joint Angles: {currJoints}")
-        
-        # if no error arises in the previous check, it's a valid goal. Accept
-        if (error_flag == 0):
-            # Valid
-            goal_joints = currJoints
-            self.get_logger().info("Received goal request")
-            return goal_joints
-        else:
-            # Invalid
-            self.get_logger().info("Rejected goal request")
-            return None
-
-
-    def move_to_goal(self, goal_joints, goalX, goalY, goalZ):
-        goal_reached = 0  # flag
-        isStuck = 0  # flag
-        distance = 0.0
-        prev_distance = 0.0
-        stuck_counter = 0
-
-        # calculate goal HTM
-        goalHTM, _ = fk(self.xarm.get_joints())
-        goalHTM[0, 3] = goalX
-        goalHTM[1, 3] = goalY
-        goalHTM[2, 3] = goalZ
-
-        self.xarm.set_joints(goal_joints) # begin going to the goal position
-
-        while (not goal_reached and not isStuck):
-            # Calculating distance to goal for feedback and checking if stuck or at goal
-            currentHTM, _ = fk(self.xarm.get_joints())
-
-            currentPos = currentHTM[:, 3].copy()  # all rows, only col 3
-            goalPos = goalHTM[:, 3].copy()
-
-            diff = currentPos - goalPos
-            distance = float(np.sqrt(diff[0]**2 + diff[1]**2 + diff[2]**2))
-
-            # check if stuck or at goal by comparing current distance to previous distance. 
-            # If the distance is not decreasing (by at least the stuck threshold), we are stuck. 
-            # If the distance is less than the 'at goal threshold', we have reached the goal.
-
-            if (np.abs(prev_distance - distance) < STUCK_THRESHOLD): # this is a jank ass way of doing it. might be better to check the movement of the actual joints for example if the wrist is rotating. 
-                stuck_counter += 1
-                self.get_logger().info(f"Stuck Counter: {stuck_counter}")
-            else:
-                stuck_counter = 0
-
-            # Flag stuck
-            if (stuck_counter >= STUCK_COUNTER_MAX):
-                isStuck = 1
-                self.xarm.set_joints(self.xarm.get_joints())   # stay where it is
-                self.get_logger().info("I am stuck!")
-
-                return False  # exit out of while loop
-            
-            # goal reached
-            if (distance < GOAL_THRESHOLD):
-                goal_reached = 1
-                self.get_logger().info("I have reached my destination!")
-                
-                return True
-            
-            prev_distance = distance
-
 
 
     def controller_state_callback(self, msg):
@@ -203,6 +82,8 @@ class Cannon(Node):
             return None
         
         data = msg.data
+
+        #self.get_logger().info(f'data received lx: {data[LEFT_X]}, ly: {data[LEFT_Y]}, rx: {data[RIGHT_X]}, ry: {data[RIGHT_Y]}, dpx: {data[DPAD_X]}, dpy: {data[DPAD_Y]}')  
 
         # what mode are we in
         if data[JOINT_BUTTON] == 1 and self.prev_joint_button == 0:
@@ -219,6 +100,7 @@ class Cannon(Node):
         # Detect button press for homing
         if data[HOME_BUTTON] == 1 and self.prev_home_button == 0:
             self.xarm.home()
+            self.where_i_should_be = [0.0, 45.0, -80.0, 0.0, 35.0, 0.0]
             self.get_logger().info('Homing...')
         self.prev_home_button = data[HOME_BUTTON]  # update state
 
@@ -232,20 +114,35 @@ class Cannon(Node):
             dpadX = data[DPAD_X]
             dpadY = data[DPAD_Y]
 
+            if leftX == 0.0 and leftY == 0.0 and rightX == 0.0 and rightY == 0.0 and dpadX == 0.0 and dpadY == 0.0:
+                return None
+
             # get current joints
-            currJoints = list(self.xarm.get_joints())
+            currJoints = list(self.where_i_should_be)   #previously: list(self.xarm.get_joints())
 
             # increment joint angles based on controller
-            currJoints[0] += leftX * JOINT_SPEED
-            currJoints[1] += leftY * JOINT_SPEED
-            currJoints[2] += rightX * JOINT_SPEED
-            currJoints[3] += rightY * JOINT_SPEED
-            currJoints[4] += dpadX * JOINT_SPEED
-            currJoints[5] += dpadY * JOINT_SPEED
+            currJoints[0] += leftX * JOINT_DELTA_MULTIPLIER
+            currJoints[1] += leftY * JOINT_DELTA_MULTIPLIER
+            currJoints[2] += rightY * JOINT_DELTA_MULTIPLIER
+            currJoints[3] += rightX * -JOINT_DELTA_MULTIPLIER
+            currJoints[4] += dpadY * JOINT_DELTA_MULTIPLIER
+            currJoints[5] += dpadX * -JOINT_DELTA_MULTIPLIER
+
+            joint1_vel = (leftX * JOINT_DELTA_MULTIPLIER) / self.timer_period
+            joint2_vel = (leftY * JOINT_DELTA_MULTIPLIER) / self.timer_period
+            joint3_vel = (rightY * JOINT_DELTA_MULTIPLIER) / self.timer_period
+            joint4_vel = (rightX * JOINT_DELTA_MULTIPLIER) / self.timer_period
+            joint5_vel = (dpadY * JOINT_DELTA_MULTIPLIER) / self.timer_period
+            joint6_vel = (dpadX * JOINT_DELTA_MULTIPLIER) / self.timer_period
+
+            joint_velocities = [joint1_vel, joint2_vel, joint3_vel, joint4_vel, joint5_vel, joint6_vel]
 
             # if at any point the goal is invalid, stay at currrent position
-            if self.xarm.is_goal_valid(currJoints) != 0:
-                self.xarm.set_joints(currJoints)
+            if self.xarm.is_goal_valid(currJoints) == 0:
+                self.where_i_should_be = currJoints
+                self.xarm.set_joints(list(self.where_i_should_be), "high_acc", list(joint_velocities))
+            else:
+                self.get_logger().info('Joint goal not valid')  
 
 
         elif self.mode == 'cartesian':
@@ -264,19 +161,22 @@ class Cannon(Node):
             # start ik() if there IS joystick input
             self.ikIsBusy = True  
 
-            currJoints = self.xarm.get_joints()
+            currJoints = list(self.where_i_should_be) #self.xarm.get_joints()
             currHTM, _ = fk(currJoints)
 
             goalHTM = currHTM.copy()
-            goalHTM[0, 3] += rightY + CART_SPEED  # X axis, in and out
-            goalHTM[1, 3] += rightX + CART_SPEED  # Y axis, left and right
-            goalHTM[2, 3] += leftY + CART_SPEED   # Z axis, up and down
+            goalHTM[0, 3] += rightY * CART_DELTA_MULTIPLIER  # X axis, in and out
+            goalHTM[1, 3] += rightX * CART_DELTA_MULTIPLIER  # Y axis, left and right
+            goalHTM[2, 3] += leftY * CART_DELTA_MULTIPLIER   # Z axis, up and down
 
             nextJoints = ik(currJoints, goalHTM)
 
+            joint_velocities = (nextJoints - currJoints) / self.timer_period
+
             if nextJoints is not None:  # if ik() gave a joint goal
                 if self.xarm.is_goal_valid(nextJoints) == 0:  # if joint goal valid
-                    self.xarm.set_joints(nextJoints)
+                    self.where_i_should_be = nextJoints
+                    self.xarm.set_joints(list(self.where_i_should_be), "high_acc", joint_velocities)
 
             self.ikIsBusy = False
 

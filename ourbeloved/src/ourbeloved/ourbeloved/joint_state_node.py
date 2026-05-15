@@ -11,7 +11,7 @@ class JointStateNode(Node):
     def __init__(self):
         super().__init__("joint_state_node")
         self.publisher = self.create_publisher(JointState, "/joint_state", 10)
-        timer_period = 0.2  # seconds, which is 5Hz
+        timer_period = 0.05  # seconds, which is 20Hz
         self.timer = self.create_timer(timer_period, self.timer_callback)
         
         self.xarm = XArm()
