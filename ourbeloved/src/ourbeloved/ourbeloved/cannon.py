@@ -75,6 +75,8 @@ class Cannon(Node):
         # Cartesian joystick control
         self.ikIsBusy = False
 
+    
+
 
     def controller_state_callback(self, msg):
         # if we're meant to be in precise mode, exit out of function
@@ -114,6 +116,7 @@ class Cannon(Node):
             dpadX = data[DPAD_X]
             dpadY = data[DPAD_Y]
 
+            # if no joystick inputs, skip this iteration
             if leftX == 0.0 and leftY == 0.0 and rightX == 0.0 and rightY == 0.0 and dpadX == 0.0 and dpadY == 0.0:
                 return None
 
@@ -128,6 +131,7 @@ class Cannon(Node):
             currJoints[4] += dpadY * JOINT_DELTA_MULTIPLIER
             currJoints[5] += dpadX * -JOINT_DELTA_MULTIPLIER
 
+            # Calculate joint velocities (degrees/second)
             joint1_vel = (leftX * JOINT_DELTA_MULTIPLIER) / self.timer_period
             joint2_vel = (leftY * JOINT_DELTA_MULTIPLIER) / self.timer_period
             joint3_vel = (rightY * JOINT_DELTA_MULTIPLIER) / self.timer_period
@@ -137,8 +141,8 @@ class Cannon(Node):
 
             joint_velocities = [joint1_vel, joint2_vel, joint3_vel, joint4_vel, joint5_vel, joint6_vel]
 
-            # if at any point the goal is invalid, stay at currrent position
-            if self.xarm.is_goal_valid(currJoints) == 0:
+            # If goal is valid, then move based on joystick input
+            if self.xarm.is_goal_valid(currJoints) == 0:  # valid
                 self.where_i_should_be = currJoints
                 self.xarm.set_joints(list(self.where_i_should_be), "high_acc", list(joint_velocities))
             else:
@@ -164,17 +168,28 @@ class Cannon(Node):
             currJoints = list(self.where_i_should_be) #self.xarm.get_joints()
             currHTM, _ = fk(currJoints)
 
+            rotation_matrix = currHTM[:, :3]  # get rid of XYZ column
+
+            # this is in EE frame
+            delta_EE = [
+                rightY * CART_DELTA_MULTIPLIER,
+                rightX * CART_DELTA_MULTIPLIER,
+                leftY * CART_DELTA_MULTIPLIER 
+            ]
+
+            delta_world = rotation_matrix @ np.array(delta_EE)  # transformed world frame deltas
+
+            # apply world frame deltas to move in EE local coords
             goalHTM = currHTM.copy()
-            goalHTM[0, 3] += rightY * CART_DELTA_MULTIPLIER  # X axis, in and out
-            goalHTM[1, 3] += rightX * CART_DELTA_MULTIPLIER  # Y axis, left and right
-            goalHTM[2, 3] += leftY * CART_DELTA_MULTIPLIER   # Z axis, up and down
+            goalHTM[0, 3] += delta_world[0] # X axis, in and out
+            goalHTM[1, 3] += delta_world[1]  # Y axis, left and right
+            goalHTM[2, 3] += delta_world[2]   # Z axis, up and down
 
             nextJoints = ik(currJoints, goalHTM)
 
-            joint_velocities = (nextJoints - currJoints) / self.timer_period
-
             if nextJoints is not None:  # if ik() gave a joint goal
                 if self.xarm.is_goal_valid(nextJoints) == 0:  # if joint goal valid
+                    joint_velocities = (nextJoints - currJoints) / self.timer_period
                     self.where_i_should_be = nextJoints
                     self.xarm.set_joints(list(self.where_i_should_be), "high_acc", joint_velocities)
 
