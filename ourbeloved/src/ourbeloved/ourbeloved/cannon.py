@@ -34,12 +34,6 @@ HOME_BUTTON = 6
 JOINT_BUTTON = 7
 CART_BUTTON = 8
 
-STUCK_THRESHOLD = 0.1       # degrees
-STUCK_COUNTER_MAX = 100  
-JOINT_THRESHOLD = 1.0       # degrees
-ITERATIONS = 100
-GOAL_THRESHOLD = 19         # mm
-
 class Cannon(Node):
 
     def __init__(self):
@@ -199,7 +193,85 @@ class Cannon(Node):
 
     def precise_joint_callback(self, msg):
         self.precise_mode = True
-        joint_pos_list = msg.position
+        target_joints = msg.position
+
+        # If the given goal is invalid, exit out of precise mode
+        if self.xarm.is_goal_valid(target_joints) != 0:
+            self.get_logger().info('Joint goal not valid') 
+            self.precise_mode = False
+            return None
+        
+        switch2PI_threshold = 10  # in mm
+        precise_threshold = 0.2
+        keepGoing = 1  # while loop flag
+        keepGoing2 = 1  # while loop flag
+
+        # Tell the robot to go to the goal joints
+        self.xarm.set_joints(target_joints)
+        self.where_i_should_be = target_joints
+
+        # Once robot is within switch2PI_threshold, switch to PI
+        while keepGoing:
+            currJoints = list(self.xarm.get_joints())
+            currHTM, _ = fk(currJoints)
+            goalHTM, _ = fk(target_joints)
+
+            currPos = currHTM[:, 3]
+            goalPos = goalHTM[:, 3]
+
+            distance = float(np.sqrt((goalPos[0] - currPos[0])**2 + 
+                                     (goalPos[1] - currPos[1])**2 + 
+                                     (goalPos[2] - currPos[2])**2))
+
+            self.get_logger().info(f'Distance to goal: {distance:.2f}mm')
+
+            if distance < switch2PI_threshold:
+                keepGoing = False 
+
+        self.get_logger().info('Switched to PI controller...')
+
+        current_joint_idx = 0 
+        hold_counter = 0
+        hold_required = int(2.0 / self.timer_period)  # 2 seconds 
+
+        while keepGoing2:
+            currJoints = list(self.xarm.get_joints())
+            time.sleep(self.timer_period)  # forces this callback to operate at 20 Hz
+
+            nextJoints = currJoints
+            error = target_joints[current_joint_idx] - currJoints[current_joint_idx]
+
+            # if this joint is done, move on to next
+            if abs(error) < precise_threshold:
+                if current_joint_idx < 5:       # stay within 6 joint range
+                    current_joint_idx += 1      
+            # else, keep correcting current joint
+            else:  
+                # if currJoints not at targetJoints yet, move more
+                if error > 0:   
+                    increment = 0.1
+                # if currJoints overshot targetJoints, move back
+                else:           
+                    increment = -0.1
+                
+                nextJoints[current_joint_idx] += increment
+
+            # if increment is valid, move incrementally
+            if self.xarm.is_goal_valid(nextJoints) == 0:    
+                self.xarm.set_joints(nextJoints)
+                self.where_i_should_be = nextJoints
+
+            # if final joint is within precise threshold
+            final_joint_error = abs(target_joints[5] - currJoints[5])
+            if current_joint_idx == 5 and final_joint_error <= precise_threshold:
+                hold_counter += 1
+            else:
+                hold_counter = 0
+
+            if hold_counter >= hold_required:
+                self.get_logger().info('Precise goal reached.')
+
+            keepGoing2 = False
 
 
 
