@@ -192,7 +192,7 @@ class Cannon(Node):
 
 
     def precise_joint_callback(self, msg):
-        self.precise_mode = True
+        self.precise_mode = True    
         target_joints = msg.position
 
         # If the given goal is invalid, exit out of precise mode
@@ -201,29 +201,35 @@ class Cannon(Node):
             self.precise_mode = False
             return None
         
-        switch2PI_threshold = 10  # in mm
+        # VARIABLES -----
+        switch2PI_threshold = 10 
         precise_threshold = 0.2
-        keepGoing = 1  # while loop flag
-        keepGoing2 = 1  # while loop flag
 
-        totalDiff = 0
+        keepGoing = 1   # while loop flag for initial set joints
+        keepGoing2 = 1  # while loop flag for incremental joint angle changes
+
+        totalDiff = 0   # for comparing to stuck_threshold
+
         stuck_threshold = 0.1
         stuckCounter = 0
         isStuck = 0
 
-        distance = [0.0] * 6
-        diffPrevCurr = [0.0] * 6  # this is from set 4
-        prevJoints = [0.0] * 6  # this is from set 4
+        distance = [0.0] * 6        # distance to goal
+        diffPrevCurr = [0.0] * 6    # for checking if stuck
+        prevJoints = [0.0] * 6      # for checking if stuck
+
 
         # Tell the robot to go to the goal joints
         self.xarm.set_joints(target_joints)
-        self.where_i_should_be = target_joints
+        self.where_i_should_be = target_joints  # used in PI controller
 
-        # Once robot is within switch2PI_threshold, switch to PI
-        # based on joint_ptp_node
         while keepGoing and not isStuck:
             currJoints = list(self.xarm.get_joints())
-            time.sleep(0.1)
+            time.sleep(self.timer_period)  # 20Hz operation
+
+            # Reset these vals after each operation
+            keepGoing = 0       
+            totalDiff = 0.0
 
             for i in range(6):
                 # Compare current joint pos to target joint pos
@@ -231,11 +237,13 @@ class Cannon(Node):
 
                 # Compare current joint pos to previous
                 diffPrevCurr[i] = abs(currJoints[i] - prevJoints[i])
-                totalDiff = totalDiff + diffPrevCurr[i]
+                totalDiff += diffPrevCurr[i]
 
+                # If difference for ALL joints is < 10, we're close enough
                 if distance[i] > switch2PI_threshold:
-                    keepGoing = 0
+                    keepGoing = 1   
 
+            # STUCK LOGIC -----
             if totalDiff < stuck_threshold:
                 stuckCounter += 1
                 self.get_logger().info(f'Stuck counter: {stuckCounter}')
@@ -248,28 +256,29 @@ class Cannon(Node):
 
             prevJoints = currJoints
 
-            self.get_logger().info(f'Distance to goal: {distance:.2f}mm')
-
-            if distance < switch2PI_threshold:
-                keepGoing = False 
+        # (end while loop)
 
         self.get_logger().info('Switched to PI controller...')
 
+        # "PI Controller" ---------
         current_joint_idx = 0 
         hold_counter = 0
         hold_required = int(2.0 / self.timer_period)  # 2 seconds 
 
         while keepGoing2:
             currJoints = list(self.xarm.get_joints())
-            time.sleep(self.timer_period)  # forces this callback to operate at 20 Hz
+            time.sleep(self.timer_period)  # 20 Hz
 
-            nextJoints = currJoints
+            nextJoints = currJoints.copy()
+
+            # Calculate error on this joint
             error = target_joints[current_joint_idx] - currJoints[current_joint_idx]
 
             # if this joint is done, move on to next
             if abs(error) < precise_threshold:
                 if current_joint_idx < 5:       # stay within 6 joint range
-                    current_joint_idx += 1      
+                    current_joint_idx += 1      # move to next joint
+
             # else, keep correcting current joint
             else:  
                 # if currJoints not at targetJoints yet, move more
@@ -284,9 +293,10 @@ class Cannon(Node):
             # if increment is valid, move incrementally
             if self.xarm.is_goal_valid(nextJoints) == 0:    
                 self.xarm.set_joints(nextJoints)
-                self.where_i_should_be = nextJoints
+                self.where_i_should_be = nextJoints  # do we need this? or can we call get_joints here
 
-            # if final joint is within precise threshold
+            # we've now reached the final joint
+            # if final joint is within precise threshold, start counting 
             final_joint_error = abs(target_joints[5] - currJoints[5])
             if current_joint_idx == 5 and final_joint_error <= precise_threshold:
                 hold_counter += 1
@@ -295,8 +305,9 @@ class Cannon(Node):
 
             if hold_counter >= hold_required:
                 self.get_logger().info('Precise goal reached.')
+                keepGoing2 = False
 
-            keepGoing2 = False
+        self.precise_mode = False  # exit precise mode at the end of function callback
 
 
 def main(args=None):
