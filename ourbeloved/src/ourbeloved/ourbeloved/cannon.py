@@ -236,35 +236,32 @@ class Cannon(Node):
 
         while keepGoing2:
             currJoints = list(self.xarm.get_joints())
-            time.sleep(self.timer_period)  # forces this callback to operate at 20 Hz
+            time.sleep(self.timer_period)
+            nextJoints = currJoints.copy()
 
-            nextJoints = currJoints
-            error = target_joints[current_joint_idx] - currJoints[current_joint_idx]
+            all_in_threshold = True
 
-            # if this joint is done, move on to next
-            if abs(error) < precise_threshold:
-                if current_joint_idx < 5:       # stay within 6 joint range
-                    current_joint_idx += 1      
-            # else, keep correcting current joint
-            else:  
-                # if currJoints not at targetJoints yet, move more
-                if error > 0:   
-                    increment = 0.1
-                # if currJoints overshot targetJoints, move back
-                else:           
-                    increment = -0.1
-                
-                nextJoints[current_joint_idx] += increment
+            for i in range(6):
+                error = target_joints[i] - currJoints[i]
 
-            # if increment is valid, move incrementally
-            if self.xarm.is_goal_valid(nextJoints) == 0:    
+                if abs(error) > precise_threshold:
+                    all_in_threshold = False
+
+                    if error > 0:
+                        increment = 0.1
+                    else:
+                        increment = -0.1
+                    
+                    nextJoints[i] += increment
+
+            if self.xarm.is_goal_valid(nextJoints) == 0:
                 self.xarm.set_joints(nextJoints)
                 self.where_i_should_be = nextJoints
 
-            # if final joint is within precise threshold
-            final_joint_error = abs(target_joints[5] - currJoints[5])
-            if current_joint_idx == 5 and final_joint_error <= precise_threshold:
+            # if allin threshold
+            if all_in_threshold:
                 hold_counter += 1
+                self.get_logger().info(f'Hold counter: {hold_counter}')
             else:
                 hold_counter = 0
 
