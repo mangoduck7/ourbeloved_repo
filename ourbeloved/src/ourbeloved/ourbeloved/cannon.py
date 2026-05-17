@@ -13,6 +13,7 @@ from ourbeloved.wx250s_kinematics import fk, ik
 from xarmclient import XArm
 
 import numpy as np
+import time
 
 # index from controller_state array
 # [leftX, rightX, dpadX, leftY, rightY, dpadY, 
@@ -104,6 +105,7 @@ class Cannon(Node):
             self.xarm.home()
             self.where_i_should_be = [0.0, 45.0, -80.0, 0.0, 35.0, 0.0]
             self.get_logger().info('Homing...')
+            time.sleep(2)
         self.prev_home_button = data[HOME_BUTTON]  # update state
 
         # MODES ---------
@@ -168,30 +170,29 @@ class Cannon(Node):
             currJoints = list(self.where_i_should_be) #self.xarm.get_joints()
             currHTM, _ = fk(currJoints)
 
-            rotation_matrix = currHTM[:, :3]  # get rid of XYZ column
+            ee_deltas = [rightY*CART_DELTA_MULTIPLIER, rightX*CART_DELTA_MULTIPLIER, leftY*CART_DELTA_MULTIPLIER, 1]
 
-            # this is in EE frame
-            delta_EE = [
-                rightY * CART_DELTA_MULTIPLIER,
-                rightX * CART_DELTA_MULTIPLIER,
-                leftY * CART_DELTA_MULTIPLIER 
-            ]
-
-            delta_world = rotation_matrix @ np.array(delta_EE)  # transformed world frame deltas
-
-            # apply world frame deltas to move in EE local coords
             goalHTM = currHTM.copy()
-            goalHTM[0, 3] += delta_world[0] # X axis, in and out
-            goalHTM[1, 3] += delta_world[1]  # Y axis, left and right
-            goalHTM[2, 3] += delta_world[2]   # Z axis, up and down
+
+            goalPos = np.vstack([currHTM, np.array([0, 0, 0, 1])]) @ np.array(ee_deltas)
+
+            goalHTM[0, 3] = goalPos[0]  # X axis, in and out
+            goalHTM[1, 3] = goalPos[1]  # Y axis, left and right
+            goalHTM[2, 3] = goalPos[2]  # Z axis, up and down
 
             nextJoints = ik(currJoints, goalHTM)
+            #self.get_logger().info(f'Next joints: {nextJoints}')  
 
             if nextJoints is not None:  # if ik() gave a joint goal
                 if self.xarm.is_goal_valid(nextJoints) == 0:  # if joint goal valid
                     joint_velocities = (nextJoints - currJoints) / self.timer_period
                     self.where_i_should_be = nextJoints
+                    joint_velocities = (np.array(nextJoints) - np.array(currJoints)) / self.timer_period
                     self.xarm.set_joints(list(self.where_i_should_be), "high_acc", joint_velocities)
+                else:
+                    self.get_logger().info('Joint goal not valid') 
+            else:
+                self.get_logger().info('Joint goal diverged')  
 
             self.ikIsBusy = False
 
