@@ -206,22 +206,47 @@ class Cannon(Node):
         keepGoing = 1  # while loop flag
         keepGoing2 = 1  # while loop flag
 
+        totalDiff = 0
+        stuck_threshold = 0.1
+        stuckCounter = 0
+        isStuck = 0
+
+        distance = [0.0] * 6
+        diffPrevCurr = [0.0] * 6  # this is from set 4
+        prevJoints = [0.0] * 6  # this is from set 4
+
         # Tell the robot to go to the goal joints
         self.xarm.set_joints(target_joints)
         self.where_i_should_be = target_joints
 
         # Once robot is within switch2PI_threshold, switch to PI
-        while keepGoing:
+        # based on joint_ptp_node
+        while keepGoing and not isStuck:
             currJoints = list(self.xarm.get_joints())
-            currHTM, _ = fk(currJoints)
-            goalHTM, _ = fk(target_joints)
+            time.sleep(0.1)
 
-            currPos = currHTM[:, 3]
-            goalPos = goalHTM[:, 3]
+            for i in range(6):
+                # Compare current joint pos to target joint pos
+                distance[i] = abs(currJoints[i] - target_joints[i])
 
-            distance = float(np.sqrt((goalPos[0] - currPos[0])**2 + 
-                                     (goalPos[1] - currPos[1])**2 + 
-                                     (goalPos[2] - currPos[2])**2))
+                # Compare current joint pos to previous
+                diffPrevCurr[i] = abs(currJoints[i] - prevJoints[i])
+                totalDiff = totalDiff + diffPrevCurr[i]
+
+                if distance[i] > switch2PI_threshold:
+                    keepGoing = 0
+
+            if totalDiff < stuck_threshold:
+                stuckCounter += 1
+                self.get_logger().info(f'Stuck counter: {stuckCounter}')
+            else:
+                stuckCounter = 0
+
+            if stuckCounter >= 5:
+                isStuck = 1
+                self.get_logger().info(f'Stuck at a totalDiff of: {totalDiff}')
+
+            prevJoints = currJoints
 
             self.get_logger().info(f'Distance to goal: {distance:.2f}mm')
 
@@ -272,7 +297,6 @@ class Cannon(Node):
                 self.get_logger().info('Precise goal reached.')
 
             keepGoing2 = False
-
 
 
 def main(args=None):
