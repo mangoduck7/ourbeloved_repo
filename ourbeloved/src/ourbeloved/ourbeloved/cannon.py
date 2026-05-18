@@ -15,6 +15,8 @@ from xarmclient import XArm
 import numpy as np
 import time
 
+from copy import deepcopy
+
 # index from controller_state array
 # [leftX, rightX, dpadX, leftY, rightY, dpadY, 
 # homeButtonState, jointButtonState, cartButtonState]
@@ -203,7 +205,8 @@ class Cannon(Node):
         
         # VARIABLES -----
         switch2PI_threshold = 10 
-        precise_threshold = 0.2
+        precise_threshold = 0.1
+        INCREMENT_VAL = 0.05
 
         keepGoing = 1   # while loop flag for initial set joints
         keepGoing2 = 1  # while loop flag for incremental joint angle changes
@@ -221,7 +224,7 @@ class Cannon(Node):
 
         # Tell the robot to go to the goal joints
         self.xarm.set_joints(target_joints)
-        self.where_i_should_be = target_joints  # used in PI controller
+        self.where_i_should_be = deepcopy(target_joints)  # used in PI controller
 
         while keepGoing and not isStuck:
             currJoints = list(self.xarm.get_joints())
@@ -250,7 +253,7 @@ class Cannon(Node):
             else:
                 stuckCounter = 0
 
-            if stuckCounter >= 5:
+            if stuckCounter >= 100:
                 isStuck = 1
                 self.get_logger().info(f'Stuck at a totalDiff of: {totalDiff}')
 
@@ -259,6 +262,7 @@ class Cannon(Node):
         # (end while loop)
 
         self.get_logger().info('Switched to PI controller...')
+        velocities = [INCREMENT_VAL / self.timer_period] * 6
 
         # "PI Controller" ---------
         current_joint_idx = 0 
@@ -269,7 +273,7 @@ class Cannon(Node):
             currJoints = list(self.xarm.get_joints())
             time.sleep(self.timer_period)  # 20 Hz
 
-            nextJoints = currJoints.copy()
+            nextJoints = self.where_i_should_be
             all_in_threshold = True
 
             for i in range(6):
@@ -278,29 +282,37 @@ class Cannon(Node):
                 # if this joint is done, move on to next
                 if abs(error) > precise_threshold:
                     all_in_threshold = False
+                    self.get_logger().info(f'error: {error} for joint: {i}')
 
-                # if currJoints not at targetJoints yet, move more
-                if error > 0:   
-                    increment = 0.1
-                # if currJoints overshot targetJoints, move back
-                else:           
-                    increment = -0.1
-                
-                nextJoints[current_joint_idx] += increment
+                    # if currJoints not at targetJoints yet, move more
+                    if error > 0:   
+                        increment = INCREMENT_VAL
+                    # if currJoints overshot targetJoints, move back
+                    else:           
+                        increment = -INCREMENT_VAL
+                    
+                    nextJoints[i] += increment
+                else:
+                    velocities[i] = 0.0
 
             # if increment is valid, move incrementally
             if self.xarm.is_goal_valid(nextJoints) == 0:    
-                self.xarm.set_joints(nextJoints)
+                self.xarm.set_joints(nextJoints, "high_acc", velocities)
                 self.where_i_should_be = nextJoints  # do we need this? or can we call get_joints here
+                # self.get_logger().info(f'where i should be: {self.where_i_should_be}')
+                # self.get_logger().info(f'current joints: {currJoints}')
+                # self.get_logger().info(f'target joints: {target_joints}')
 
             if all_in_threshold:
                 hold_counter += 1
                 self.get_logger().info(f'Hold Counter: {hold_counter}')
+                self.get_logger().info(f'get joints: {self.xarm.get_joints()}')
             else:
                 hold_counter = 0
 
             if hold_counter >= hold_required:
                 self.get_logger().info('Precise goal reached.')
+                self.get_logger().info(f'get joints: {self.xarm.get_joints()}')
                 keepGoing2 = False
 
         self.precise_mode = False  # exit precise mode at the end of function callback
