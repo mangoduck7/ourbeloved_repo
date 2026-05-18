@@ -261,45 +261,46 @@ class Cannon(Node):
         self.get_logger().info('Switched to PI controller...')
 
         # "PI Controller" ---------
-        current_joint_idx = 0 
         hold_counter = 0
         hold_required = int(2.0 / self.timer_period)  # 2 seconds 
+
+        Kp = 0.5    
+        Ki = 0.01
+        integral = [0.0] * 6
 
         while keepGoing2:
             currJoints = list(self.xarm.get_joints())
             time.sleep(self.timer_period)  # 20 Hz
 
             nextJoints = currJoints.copy()
+            all_in_threshold = True
+            
+            for i in range(6):
+                error = target_joints[i] - currJoints[i]
 
-            # Calculate error on this joint
-            error = target_joints[current_joint_idx] - currJoints[current_joint_idx]
+                # if this joint is done, move on to next
+                if abs(error) < precise_threshold:
+                    all_in_threshold = False
 
-            # if this joint is done, move on to next
-            if abs(error) < precise_threshold:
-                if current_joint_idx < 5:       # stay within 6 joint range
-                    current_joint_idx += 1      # move to next joint
+                # else, keep correcting current joint
+                else:  
+                    # Update integral
+                    integral[i] += error * self.timer_period  # timer_period = dt
 
-            # else, keep correcting current joint
-            else:  
-                # if currJoints not at targetJoints yet, move more
-                if error > 0:   
-                    increment = 0.1
-                # if currJoints overshot targetJoints, move back
-                else:           
-                    increment = -0.1
-                
-                nextJoints[current_joint_idx] += increment
+                    # Kp * error moves faster when far and slow when close
+                    # Ki * integral[i] accumulates error over time to elim. steady state errs.
+                    output = Kp * error + Ki * integral[i]
+                    
+                    nextJoints[i] += output
 
             # if increment is valid, move incrementally
             if self.xarm.is_goal_valid(nextJoints) == 0:    
                 self.xarm.set_joints(nextJoints)
                 self.where_i_should_be = nextJoints  # do we need this? or can we call get_joints here
 
-            # we've now reached the final joint
-            # if final joint is within precise threshold, start counting 
-            final_joint_error = abs(target_joints[5] - currJoints[5])
-            if current_joint_idx == 5 and final_joint_error <= precise_threshold:
+            if all_in_threshold:
                 hold_counter += 1
+                self.get_logger().info(f'Hold counter: {hold_counter}')
             else:
                 hold_counter = 0
 
